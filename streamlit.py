@@ -1,226 +1,88 @@
+# app.py
 
-!mkdir -p ~/.kaggle
-!cp kaggle.json ~/.kaggle/
-!chmod 600 ~/.kaggle/kaggle.json
-
-import streamlit as st
 import os
+import zipfile
 import subprocess
 import pandas as pd
+import numpy as np
 
-st.header("Download sob demanda de imagens do Kaggle")
+import streamlit as st
 
-# Upload do kaggle.json
-kaggle_json = st.file_uploader("Envie seu kaggle.json", type="json")
-if kaggle_json:
+# Função para baixar dataset da competição
+def download_panda_dataset():
+    # roda comando kaggle para baixar os dados da competição
+    cmd = [
+        "kaggle", "competitions", "download",
+        "-c", "prostate-cancer-grade-assessment",
+        "-p", ".",   # pasta atual
+        "--quiet"
+    ]
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode, result.stdout, result.stderr
+
+# --- UI Streamlit ---
+st.title("PANDA / Prostate Cancer Grade Assessment")
+
+st.header("1. Configurar credenciais Kaggle")
+
+kaggle_file = st.file_uploader("Envie seu kaggle.json", type="json")
+if kaggle_file:
     os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-    with open(os.path.expanduser("~/.kaggle/kaggle.json"), "wb") as f:
-        f.write(kaggle_json.read())
-    os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 600)
-    st.success("kaggle.json configurado!")
+    kaggle_path = os.path.expanduser("~/.kaggle/kaggle.json")
+    with open(kaggle_path, "wb") as f:
+        f.write(kaggle_file.read())
+    os.chmod(kaggle_path, 0o600)
+    st.success("kaggle.json salvo e configurado!")
 
-# Upload do CSV com labels
-csv_file = st.file_uploader("Envie o train.csv", type="csv")
-if csv_file:
-    labels = pd.read_csv(csv_file)
-    labels = labels[['image_id', 'isup_grade']]
+    if st.button("Baixar e extrair dataset completa"):
+        st.write("Baixando dataset da competição … isso pode demorar …")
+        ret, out, err = download_panda_dataset()
+        if ret != 0:
+            st.error(f"Erro ao baixar: {err}")
+        else:
+            st.write("Download completo. Extraindo …")
+            with zipfile.ZipFile("prostate-cancer-grade-assessment.zip", "r") as z:
+                z.extractall()
+            st.success("Dataset baixado e extraído com sucesso!")
 
-    # Pasta onde as imagens serão salvas
-    os.makedirs("train_images", exist_ok=True)
+# Se o CSV existir — avançamos para carregar labels
+if os.path.exists("train.csv"):
+    st.header("2. Carregar labels (train.csv)")
+    labels = pd.read_csv("train.csv")
+    if "image_id" in labels.columns and "isup_grade" in labels.columns:
+        labels = labels[["image_id", "isup_grade"]]
+        st.write("Amostra dos dados de label:")
+        st.write(labels.head())
+    else:
+        st.error("train.csv não contém as colunas esperadas ('image_id', 'isup_grade')")
 
-    # Número de imagens a baixar
-    sample_size = st.slider("Quantidade de imagens para baixar", 50, 2000, 200)
-
-    if st.button("Baixar imagens selecionadas"):
-        st.write("Verificando imagens...")
-        count_downloaded = 0
-        for i, row in labels.head(sample_size).iterrows():
-            img_id = row['image_id']
-            img_path = f"train_images/{img_id}.png"
-
-            if not os.path.exists(img_path):
-                st.write(f"Baixando {img_id}.png ...")
-                subprocess.run([
+    st.header("3. Baixar / carregar algumas imagens (opcional)")
+    n = st.number_input("Quantas imagens baixar / carregar", min_value=10, max_value=5000, value=200)
+    if st.button("Baixar e carregar imagens"):
+        # cria pasta para imagens
+        os.makedirs("train_images", exist_ok=True)
+        count = 0
+        for i, row in labels.head(n).iterrows():
+            img_id = row["image_id"]
+            img_file = f"train_images/{img_id}.png"
+            if not os.path.exists(img_file):
+                # download da imagem via kaggle API
+                cmd = [
                     "kaggle", "competitions", "download",
                     "-c", "prostate-cancer-grade-assessment",
                     "-f", f"train_images/{img_id}.png",
-                    "-p", "train_images"
-                ])
-                count_downloaded += 1
-        st.success(f"{count_downloaded} imagens baixadas com sucesso!")
+                    "-p", "train_images",
+                    "--quiet"
+                ]
+                subprocess.run(cmd)
+                count += 1
+        st.success(f"{count} novas imagens baixadas (se já existiam, não serão baixadas).")
 
-try:
-    import streamlit
-except ModuleNotFoundError:
-    print("Streamlit not found. Installing streamlit...")
-    !pip install streamlit
+        st.write("Lista de imagens baixadas:")
+        files = os.listdir("train_images")
+        st.write(files[:10])
 
-try:
-    import cv2
-except ModuleNotFoundError:
-    print("OpenCV (cv2) not found. Installing opencv-python...")
-    !pip install opencv-python
+    # Se quiser, adicionar mais etapas, por exemplo carregar imagens, pré-processar, treinar modelo etc.
 
-try:
-    import sklearn
-except ModuleNotFoundError:
-    print("scikit-learn not found. Installing scikit-learn...")
-    !pip install scikit-learn
-
-import streamlit as st
-import os
-import cv2
-import numpy as np
-import pandas as pd
-import tensorflow as tf
-from tensorflow.keras import layers, models
-from sklearn.model_selection import train_test_split
-import zipfile
-import subprocess
-
-st.title("Prostate Cancer Grade Assessment – Treinamento Deep Learning")
-st.write("App Streamlit baseado no notebook do Colab.")
-
-st.header("1. Configuração do Kaggle")
-
-kaggle_json = st.file_uploader("Envie seu kaggle.json", type="json")
-
-if kaggle_json:
-    st.success("kaggle.json enviado!")
-    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-    with open(os.path.expanduser("~/.kaggle/kaggle.json"), "wb") as f:
-        f.write(kaggle_json.read())
-    os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 600)
-    st.info("kaggle.json configurado!")
-
-    if st.button("Baixar Dataset da Competição"):
-        st.write("Baixando dataset...")
-        subprocess.run(["kaggle", "competitions", "download", "-c", "prostate-cancer-grade-assessment"])
-
-        st.write("Extraindo ZIP...")
-        with zipfile.ZipFile("prostate-cancer-grade-assessment.zip", "r") as z:
-            z.extractall()
-
-        st.success("Dataset baixado e extraído!")
-
-if os.path.exists("train.csv"):
-    st.header("2. Carregando CSV")
-    labels = pd.read_csv("train.csv")
-    labels = labels[['image_id', 'isup_grade']]
-    st.write(labels.head())
 else:
-    st.stop()
-
-st.header("3. Carregar imagens (Amostra)")
-
-sample_size = st.slider(
-    "Quantidade de imagens para carregar (máximo 10.000, recomendado 2000 para não travar)",
-    200, 10000, 2000
-)
-
-def load_image(path, size=224):
-    img = cv2.imread(path)
-    if img is None:
-        return None
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (size, size))
-    return img
-
-load_btn = st.button("Carregar imagens")
-
-if load_btn:
-    X = []
-    y = []
-
-    st.write("Carregando imagens...")
-
-    for i, row in labels.head(sample_size).iterrows():
-        img_path = f"train_images/{row['image_id']}.png"
-        if os.path.exists(img_path):
-            img = load_image(img_path)
-            if img is not None:
-                X.append(img)
-                y.append(row['isup_grade'])
-
-    X = np.array(X)
-    y = np.array(y)
-
-    st.success(f"{len(X)} imagens carregadas!")
-
-    # Normalizar
-    X = X / 255.0
-
-    # Train/Val
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    st.write("Formato do conjunto de treino:", X_train.shape)
-    st.write("Formato do conjunto de validação:", X_val.shape)
-
-    st.session_state.X_train = X_train
-    st.session_state.X_val = X_val
-    st.session_state.y_train = y_train
-    st.session_state.y_val = y_val
-
-if "X_train" in st.session_state:
-    st.header("4. Criar modelo CNN")
-
-    model = models.Sequential([
-        layers.Conv2D(32, (3,3), activation='relu', input_shape=(224,224,3)),
-        layers.MaxPooling2D(2,2),
-
-        layers.Conv2D(64, (3,3), activation='relu'),
-        layers.MaxPooling2D(2,2),
-
-        layers.Conv2D(128, (3,3), activation='relu'),
-        layers.MaxPooling2D(2,2),
-
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(6, activation='softmax')
-    ])
-
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-
-    st.success("Modelo criado!")
-
-st.header("5. Treinamento")
-
-    epochs = st.slider("Épocas", 1, 20, 5)
-
-    if st.button("Treinar modelo"):
-        history = model.fit(
-            st.session_state.X_train,
-            st.session_state.y_train,
-            validation_data=(st.session_state.X_val, st.session_state.y_val),
-            epochs=epochs,
-            batch_size=32
-        )
-
-        st.success("Treinamento completo!")
-
-        st.line_chart(history.history["accuracy"])
-        st.line_chart(history.history["val_accuracy"])
-
-        st.session_state.model = model
-
-if "model" in st.session_state:
-    st.header("6. Avaliar modelo")
-
-    loss, acc = st.session_state.model.evaluate(
-        st.session_state.X_val,
-        st.session_state.y_val,
-        verbose=0
-    )
-
-    st.write(f"**Accuracy validação:** {acc:.4f}")
-
-    st.header("7. Salvar modelo")
-    st.session_state.model.save("prostate_cancer_model.h5")
-    st.success("Modelo salvo como prostate_cancer_model.h5")
-
+    st.info("Quando você baixar e extrair o dataset, train.csv aparecerá aqui.")
