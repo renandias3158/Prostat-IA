@@ -6,4 +6,5 @@ opencv-python
 matplotlib
 Pillow
 tensorflow-cpu
+tensorflow
 kaggle
